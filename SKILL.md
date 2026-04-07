@@ -53,56 +53,50 @@ Default timezone is set in `~/.chronolog/config.json`. When discussing businesse
 ## How to Use
 
 ### Log an event
-When something significant happens (email sent, client onboarded, system crashed, meeting scheduled), append to the timeline:
+When something significant happens (email sent, client onboarded, system crashed, meeting scheduled):
 ```bash
-echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%S%z)'","event":"description","category":"category"}' >> ~/.chronolog/timeline.jsonl
+chronolog log "sent 21 outreach emails" -c outreach
+chronolog log "voice engine rate limit hit" -c error
+chronolog log "first client onboarding email sent" -c milestone
 ```
-Categories: `outreach`, `client`, `system`, `build`, `meeting`, `milestone`, `error`
+Categories: `outreach`, `client`, `system`, `build`, `meeting`, `milestone`, `error`, `note`
 
 ### Check recent events
 ```bash
-tail -20 ~/.chronolog/timeline.jsonl | python3 -c "
-import json, sys
-from datetime import datetime, timezone
-now = datetime.now(timezone.utc)
-for line in sys.stdin:
-    e = json.loads(line.strip())
-    print(f'{e[\"ts\"]} | {e[\"category\"]:10s} | {e[\"event\"]}')
-"
+chronolog recent          # Last 24 hours
+chronolog recent 2        # Last 2 hours
 ```
 
 ### Add a deadline
 ```bash
-python3 -c "
-import json
-path = '$(echo ~/.chronolog/deadlines.json)'
-try:
-    with open(path) as f: deadlines = json.load(f)
-except: deadlines = []
-deadlines.append({'deadline': 'ISO_DATETIME', 'description': 'WHAT', 'status': 'pending'})
-with open(path, 'w') as f: json.dump(deadlines, f, indent=2)
-"
+chronolog add-deadline "Follow-up emails to prospects" -d 2026-04-10T10:00:00-04:00
 ```
 
 ### Check deadlines
 ```bash
-python3 -c "
-import json
-from datetime import datetime, timezone, timedelta
-path = '$(echo ~/.chronolog/deadlines.json)'
-with open(path) as f: deadlines = json.load(f)
-now = datetime.now(timezone.utc)
-for d in deadlines:
-    if d['status'] != 'pending': continue
-    dt = datetime.fromisoformat(d['deadline'])
-    delta = dt - now
-    if delta.total_seconds() < 0:
-        print(f'OVERDUE: {d[\"description\"]}')
-    elif delta.days < 2:
-        print(f'DUE SOON ({delta.days}d {delta.seconds//3600}h): {d[\"description\"]}')
-    else:
-        print(f'Upcoming ({delta.days}d): {d[\"description\"]}')
-"
+chronolog deadlines                    # Show all pending + overdue
+chronolog deadlines --show-completed   # Include completed
+```
+
+### Mark a deadline done
+```bash
+chronolog complete-deadline 0          # By index from 'deadlines' output
+```
+
+### Full status (time + recent + deadlines)
+```bash
+chronolog status
+```
+
+### Check quiet hours before notifying
+```bash
+chronolog quiet   # Returns whether it's quiet hours (11pm-7am)
+```
+
+### Archive old events
+```bash
+chronolog prune        # Archive events older than 7 days
+chronolog prune 14     # Archive events older than 14 days
 ```
 
 ## When to Trigger
@@ -118,15 +112,17 @@ Activate this skill when:
 ## Installation
 
 ```bash
-# Create the chronolog directory
-mkdir -p ~/.chronolog
+# Clone the repo
+git clone https://github.com/Bittards/chronolog.git
+cd chronolog
 
-# Initialize config
-echo '{"default_timezone": "America/New_York", "known_locations": {}}' > ~/.chronolog/config.json
+# Make the CLI available (pick one)
+chmod +x chronolog.py
+ln -s $(pwd)/chronolog.py /usr/local/bin/chronolog
+# OR just run with: python3 chronolog.py <command>
 
-# Initialize empty timeline and deadlines
-touch ~/.chronolog/timeline.jsonl
-echo '[]' > ~/.chronolog/deadlines.json
+# First run auto-initializes ~/.chronolog/ with config, timeline, and deadlines
+chronolog status
 ```
 
 ### Claude Code

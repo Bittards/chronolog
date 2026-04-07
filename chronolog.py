@@ -35,14 +35,116 @@ CONFIG_FILE = CHRONOLOG_DIR / "config.json"
 ARCHIVE_DIR = CHRONOLOG_DIR / "archive"
 
 # Default quiet hours (suppress non-urgent notifications)
-QUIET_START = 23  # 11pm
-QUIET_END = 7     # 7am
+QUIET_START = 23  # 11pm -- Ronnie's bedtime
+QUIET_END = 7     # 6:30am wake, 7am buffer
 
 # Business hours
 BIZ_START = 9
 BIZ_END = 17
 
 CATEGORIES = ["outreach", "client", "system", "build", "meeting", "milestone", "error", "note"]
+
+# US holidays (fixed dates + computed ones)
+def _get_holidays(year):
+    """Return dict of date -> holiday name for a given year."""
+    from datetime import date
+    holidays = {
+        date(year, 1, 1): "New Year's Day",
+        date(year, 7, 4): "Independence Day",
+        date(year, 12, 25): "Christmas Day",
+        date(year, 12, 31): "New Year's Eve",
+        date(year, 11, 11): "Veterans Day",
+        date(year, 6, 19): "Juneteenth",
+    }
+    # MLK Day: 3rd Monday in January
+    d = date(year, 1, 1)
+    mondays = 0
+    while mondays < 3:
+        if d.weekday() == 0:
+            mondays += 1
+            if mondays == 3:
+                holidays[d] = "MLK Day"
+        d += timedelta(days=1)
+    # Presidents Day: 3rd Monday in February
+    d = date(year, 2, 1)
+    mondays = 0
+    while mondays < 3:
+        if d.weekday() == 0:
+            mondays += 1
+            if mondays == 3:
+                holidays[d] = "Presidents Day"
+        d += timedelta(days=1)
+    # Memorial Day: last Monday in May
+    d = date(year, 5, 31)
+    while d.weekday() != 0:
+        d -= timedelta(days=1)
+    holidays[d] = "Memorial Day"
+    # Labor Day: 1st Monday in September
+    d = date(year, 9, 1)
+    while d.weekday() != 0:
+        d += timedelta(days=1)
+    holidays[d] = "Labor Day"
+    # Thanksgiving: 4th Thursday in November
+    d = date(year, 11, 1)
+    thursdays = 0
+    while thursdays < 4:
+        if d.weekday() == 3:
+            thursdays += 1
+            if thursdays == 4:
+                holidays[d] = "Thanksgiving"
+                holidays[d + timedelta(days=1)] = "Black Friday"
+        d += timedelta(days=1)
+    # Easter (anonymous Gregorian algorithm)
+    a = year % 19
+    b, c = divmod(year, 100)
+    d_val, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d_val - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day_of = ((h + l - 7 * m + 114) % 31) + 1
+    easter = date(year, month, day_of)
+    holidays[easter] = "Easter Sunday"
+    holidays[easter - timedelta(days=2)] = "Good Friday"
+    holidays[easter + timedelta(days=1)] = "Easter Monday"
+    return holidays
+
+
+def check_holiday(dt=None):
+    """Check if a date is a holiday. Returns holiday name or None."""
+    if dt is None:
+        dt = now_local()
+    d = dt.date() if hasattr(dt, 'date') else dt
+    holidays = _get_holidays(d.year)
+    return holidays.get(d)
+
+
+def is_good_send_time(dt=None):
+    """Check if now is a good time to send outreach. Returns (ok, reason)."""
+    if dt is None:
+        dt = now_local()
+    day = dt.strftime("%A")
+    hour = dt.hour
+    holiday = check_holiday(dt)
+
+    if holiday:
+        return False, f"BLOCKED: Today is {holiday}. Do not send outreach on holidays."
+    if day in ("Saturday", "Sunday"):
+        return False, f"BLOCKED: It's {day}. Outreach should go out Tuesday-Thursday."
+    if day == "Monday":
+        return False, "WARNING: Monday is not ideal -- inboxes are full from the weekend. Tuesday-Thursday is better."
+    if day == "Friday":
+        return False, "WARNING: Friday afternoon emails get buried over the weekend. Send before noon or wait until Tuesday."
+    if hour < 9:
+        return False, f"BLOCKED: It's {hour}:00. Wait until 9-10 AM for outreach."
+    if hour >= 17:
+        return False, f"BLOCKED: It's {hour}:00. After business hours. Queue for tomorrow 9-10 AM."
+    if 9 <= hour <= 11:
+        return True, "GOOD: Prime send window (9-11 AM, Tuesday-Thursday)."
+    return True, f"OK: Business hours but not peak. 9-11 AM is better."
 
 
 def ensure_init():
@@ -131,6 +233,11 @@ def cmd_now(args):
 
     print(f"{emoji} {t.strftime('%A, %B %d, %Y %I:%M %p %Z')}")
     print(f"   {context}")
+
+    # Holiday check
+    holiday = check_holiday(t)
+    if holiday:
+        print(f"   🎉 TODAY IS: {holiday} -- adjust expectations accordingly")
 
     # Show next deadline if any
     deadlines = _load_deadlines()
@@ -324,6 +431,29 @@ def cmd_quiet(args):
     return is_quiet
 
 
+def cmd_send_check(args):
+    """Check if now is a good time to send outreach."""
+    t = now_local()
+    ok, reason = is_good_send_time(t)
+    holiday = check_holiday(t)
+
+    print(f"📧 SEND CHECK: {t.strftime('%A, %B %d, %Y %I:%M %p %Z')}")
+    if holiday:
+        print(f"   🎉 Holiday: {holiday}")
+    print(f"   {reason}")
+
+    if not ok:
+        # Suggest next good window
+        next_good = t
+        for _ in range(14 * 24):  # Search up to 2 weeks
+            next_good += timedelta(hours=1)
+            ok2, _ = is_good_send_time(next_good)
+            if ok2:
+                print(f"   Next good window: {next_good.strftime('%A, %B %d at %I:%M %p %Z')}")
+                break
+    return ok
+
+
 def cmd_prune(args):
     """Archive events older than N days."""
     days = args.days or 7
@@ -402,6 +532,9 @@ def main():
     comp_p = sub.add_parser("complete-deadline", help="Mark deadline done")
     comp_p.add_argument("id", type=int, help="Deadline index from 'deadlines' command")
 
+    # send-check
+    sub.add_parser("send-check", help="Check if now is a good time to send outreach")
+
     # status
     sub.add_parser("status", help="Full status overview")
 
@@ -427,6 +560,7 @@ def main():
         "complete-deadline": cmd_complete,
         "status": cmd_status,
         "quiet": cmd_quiet,
+        "send-check": cmd_send_check,
         "prune": cmd_prune,
     }
 
